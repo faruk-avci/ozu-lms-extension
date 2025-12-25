@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Ozyegin LMS Downloader",
+  "version": "1.0",
+  "description": "Download all course materials as a structured ZIP file.",
+  "permissions": [
+    "activeTab",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://lms.ozyegin.edu.tr/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://lms.ozyegin.edu.tr/course/view.php*"],
+      "js": ["jszip.min.js", "content.js"]
+    }
+  ]
+}
