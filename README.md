@@ -4,7 +4,6 @@ A browser extension that helps students build a structured, offline archive of t
 
 Designed for Ozyegin University LMS (Moodle), this tool automates the process of organizing lecture notes, slides, and resources into a local library.
 
-![Project Screenshot](Add_A_Screenshot_Here.png)
 
 ## Why I Built This
 LMS access is often temporary. I wanted a way to:
