@@ -210,16 +210,19 @@ function promptUserForSections(sectionsMap) {
 }
 
 // 7. Main Logic
+// --- 5. MAIN DOWNLOAD LOGIC (FIXED FOR FIREFOX/JSZIP ERROR) ---
+
 async function startDownloadProcess() {
     const btn = this;
     const originalText = btn.innerText;
     
     try {
-        const sectionsList = document.querySelectorAll('ul.weeks li[id^="section-"]');
-        if (sectionsList.length === 0) { alert("No sections found."); return; }
+        // Universal Selection
+        const sectionsList = findAllElements(MOODLE_SELECTORS.sections);
+        if (!sectionsList || sectionsList.length === 0) { alert("No sections found on this page."); return; }
 
         const sectionsMap = Array.from(sectionsList).map(section => {
-            let name = section.getAttribute('aria-label') || section.querySelector('.sectionname')?.innerText || section.id;
+            let name = findElement(MOODLE_SELECTORS.sectionTitle, section)?.innerText || section.id || "Unknown Section";
             return { element: section, name: sanitizeFilename(name) };
         });
 
@@ -245,8 +248,12 @@ async function startDownloadProcess() {
             const usedFilenames = new Set();
             const structEntry = { title: sectionName, files: [], links: [] };
 
-            // A. FILES
-            section.querySelectorAll('.activity.resource a').forEach((link) => {
+            const allLinks = [
+                ...findAllElements(MOODLE_SELECTORS.resources, section),
+                ...findAllElements(MOODLE_SELECTORS.folders, section)
+            ];
+
+            allLinks.forEach((link) => {
                 const detectedType = detectTypeFromDOM(link);
                 if (!allowedTypes.includes(detectedType)) return;
 
@@ -256,118 +263,126 @@ async function startDownloadProcess() {
                 name = getUniqueName(name, usedFilenames);
 
                 if (url && name) {
-                    const item = { type: 'file', folder, url, originalName: name, finalFileName: name, sectionPath: sectionName };
-                    downloadQueue.push(item);
-                    structEntry.files.push(item);
-                    totalItemsFound++;
-                }
-            });
-
-            // B. LINKS & PAGES
-            section.querySelectorAll('.activity.url a, .activity.page a').forEach((link) => {
-                let type = "Link";
-                const parent = link.closest('.activity');
-                if (parent.classList.contains('page')) type = "Page";
-                
-                let name = link.querySelector('.instancename')?.childNodes[0].textContent || link.innerText;
-                name = name.trim();
-                const url = link.href;
-
-                if (name && url) {
-                    if (type === "Page") {
-                        let pageFileName = sanitizeFilename(name) + ".html";
-                        pageFileName = getUniqueName(pageFileName, usedFilenames);
-                        const item = { type: 'page-fetch', folder, url, finalFileName: pageFileName, title: name };
+                    if (detectedType === 'FOLDER') {
+                        const item = { 
+                            type: 'folder-fetch', 
+                            folder: folder, 
+                            url: url, 
+                            folderName: name,
+                            sectionPath: sectionName 
+                        };
                         downloadQueue.push(item);
-                        structEntry.files.push({ finalFileName: pageFileName, originalName: name, isLocalPage: true });
+                        structEntry.links.push({ type: 'FOLDER', name: name + " (See Subfolder)", url: url });
                         totalItemsFound++;
                     } else {
-                        structEntry.links.push({ type: type, name: name, url: url });
+                        const item = { type: 'file', folder, url, originalName: name, finalFileName: name, sectionPath: sectionName };
+                        downloadQueue.push(item);
+                        structEntry.files.push(item);
                         totalItemsFound++;
                     }
                 }
             });
+
+            // Pages/Links
+            if (allowedTypes.includes('OTHER')) {
+                const pageLinks = findAllElements(MOODLE_SELECTORS.pages, section);
+                if(pageLinks) {
+                    pageLinks.forEach(link => {
+                        let name = link.querySelector('.instancename')?.childNodes[0].textContent || link.innerText;
+                        name = name.trim();
+                        if (name && link.href) {
+                            structEntry.links.push({ type: 'LINK', name: name, url: link.href });
+                        }
+                    });
+                }
+            }
 
             if (structEntry.files.length > 0 || structEntry.links.length > 0) courseStructure.push(structEntry);
         });
 
-        if (totalItemsFound === 0) { alert("No matching files found."); btn.innerText=originalText; btn.disabled=false; return; }
+        if (totalItemsFound === 0) { alert("No matching content found."); btn.innerText=originalText; btn.disabled=false; return; }
 
         // --- DOWNLOAD PHASE ---
-        btn.innerText = `⏳ Processing ${downloadQueue.length} items...`;
+        btn.innerText = `⏳ Downloading...`;
         
         const fetchPromises = downloadQueue.map(async (item) => {
             try {
-                const response = await fetch(item.url);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                // PAGE Logic
-                if (item.type === 'page-fetch') {
-                    const fullHtml = await response.text();
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(fullHtml, 'text/html');
-                    let content = doc.querySelector('.box.generalbox')?.innerHTML || doc.querySelector('[role="main"]')?.innerHTML || "<p>Content not found</p>";
-                    item.folder.file(item.finalFileName, wrapLocalPage(item.title, content));
-                } 
-                // FILE Logic
-                else {
-                    // Check headers to prevent HTML-saved-as-XLS error
-                    const contentType = response.headers.get('content-type');
+                // --- A. FOLDER SUB-FETCH LOGIC ---
+                if (item.type === 'folder-fetch') {
+                    const response = await fetch(item.url);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const htmlText = await response.text();
+                    const doc = new DOMParser().parseFromString(htmlText, 'text/html');
                     
-                    // If we expect a binary file but get HTML, it's an error (e.g. Login page redirection)
-                    if (contentType && contentType.includes('text/html')) {
-                        throw new Error("Target is a webpage, not a file (Login or Redirect issue).");
+                    const subZipFolder = item.folder.folder(item.folderName);
+                    const fileLinks = doc.querySelectorAll('.fp-filename-icon a, .file-picker a'); 
+                    
+                    if (fileLinks.length === 0) {
+                        subZipFolder.file("Empty.txt", "No files found.");
+                        return;
                     }
 
-                    const blob = await response.blob();
+                    const subPromises = Array.from(fileLinks).map(async (subLink) => {
+                        try {
+                            const subUrl = subLink.href;
+                            let subName = subLink.querySelector('.fp-filename')?.innerText || subLink.innerText;
+                            subName = sanitizeFilename(subName);
+                            
+                            const subRes = await fetch(subUrl);
+                            
+                            // 🛠️ FIX: Blob yerine ArrayBuffer kullanıyoruz
+                            const subBlob = await subRes.blob();
+                            const subArrayBuffer = await subBlob.arrayBuffer();
+                            
+                            subZipFolder.file(subName, subArrayBuffer);
+                        } catch (subErr) {
+                            subZipFolder.file("Error_File.txt", "Failed: " + subErr.message);
+                        }
+                    });
+
+                    await Promise.allSettled(subPromises);
+                
+                } 
+                // --- B. STANDARD FILE DOWNLOAD ---
+                else {
+                    const response = await fetch(item.url);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     
-                    // Handle Extensions
-                    if (!item.originalName.includes('.')) {
+                    const contentType = response.headers.get('content-type');
+                    if (contentType && contentType.includes('text/html')) throw new Error("Link redirected to webpage (Login required?)");
+
+                    // 🛠️ FIX: Önce Blob al (MIME type tespiti için), sonra ArrayBuffer'a çevir (JSZip hatasını önlemek için)
+                    const blob = await response.blob();
+                    const arrayBuffer = await blob.arrayBuffer(); // <--- CRITICAL FIX HERE
+                    
+                    // Ext fix using the Blob's type
+                    if (!item.finalFileName.includes('.')) {
                         const t = blob.type;
                         if (t.includes('pdf')) item.finalFileName += ".pdf";
                         else if (t.includes('word')) item.finalFileName += ".docx";
                         else if (t.includes('presentation')) item.finalFileName += ".pptx";
-                        else if (t.includes('spreadsheet') || t.includes('excel')) item.finalFileName += ".xlsx";
                         else if (t.includes('zip')) item.finalFileName += ".zip";
+                        else if (t.includes('excel') || t.includes('sheet')) item.finalFileName += ".xlsx";
                     }
-                    item.folder.file(item.finalFileName, blob);
+                    
+                    // JSZip'e ArrayBuffer veriyoruz, Blob değil.
+                    item.folder.file(item.finalFileName, arrayBuffer);
                 }
             } catch (err) {
-                // LOGGING
-                const errMsg = `FAILED: ${item.originalName} - Reason: ${err.message}`;
-                console.warn(errMsg); // Show in console
-                errorLog.push(errMsg); // Add to global log
-                
-                // Add specific error file in folder
-                item.folder.file(`${item.originalName}_FAILED.txt`, `Download URL: ${item.url}\nError: ${err.message}`);
+                const msg = `FAILED: ${item.originalName || item.folderName} - ${err.message}`;
+                console.warn(msg);
+                errorLog.push(msg);
+                item.folder.file((item.originalName || "Error") + "_LOG.txt", msg);
                 item.error = true;
             }
         });
 
         await Promise.allSettled(fetchPromises);
 
-        // --- GENERATE GLOBAL ERROR REPORT ---
-        if (errorLog.length > 0) {
-            const reportContent = `
-========================================
-   Ozyegin LMS Downloader - Error Log
-========================================
-Total Errors: ${errorLog.length}
+        if (errorLog.length > 0) zip.file("!_ERROR_REPORT.txt", errorLog.join('\n'));
 
-${errorLog.join('\n\n')}
-
-========================================
-TROUBLESHOOTING:
-1. "Target is a webpage": The file link was actually a redirect to a login page.
-2. "HTTP 403/404": The file is hidden or deleted by the professor.
-3. "Network Error": Check your internet connection.
-            `;
-            zip.file("!_ERROR_REPORT.txt", reportContent);
-        }
-
-        // --- FINALIZE ---
-        btn.innerText = "📝 Building Site...";
-        generateIndexHtml(zip, courseStructure, document.title || "Course");
+        btn.innerText = "📝 Building Index...";
+        generateIndexHtml(zip, courseStructure, document.title || "Course Archive");
 
         btn.innerText = "📦 Zipping...";
         const content = await zip.generateAsync({ type: "blob" });
@@ -376,19 +391,12 @@ TROUBLESHOOTING:
         a.download = `${sanitizeFilename(document.title)}_Archive.zip`;
         document.body.append(a); a.click(); a.remove();
 
-        // Final Alert
-        if (errorLog.length > 0) {
-            alert(`⚠️ Download Complete with ${errorLog.length} errors.\n\nPlease check the '!_ERROR_REPORT.txt' inside the zip file.`);
-        } else {
-            alert("✅ Download Successful!");
-        }
-        
         btn.innerText = "✅ Done";
-        setTimeout(() => { btn.innerText = originalText; btn.disabled = false; }, 3000);
+        setTimeout(() => { btn.innerText = originalText; btn.disabled = false; }, 4000);
 
     } catch (e) {
         console.error(e);
-        alert("Critical Error: " + e.message);
+        alert("Error: " + e.message);
         btn.innerText = "❌ Error";
     }
 }
