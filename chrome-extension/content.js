@@ -1,16 +1,14 @@
-// --- 1. CONFIGURATION & HELPERS (Eksik olan kısım burasıydı) ---
+// --- 1. CONFIGURATION & HELPERS ---
 
 const OZU_SELECTORS = {
-    // Özyeğin Moodle Yapısı
     header: ['.page-header-headings', '.page-header h1', 'h1'], 
     sections: ['ul.weeks li.section', 'ul.topics li.section', 'li[id^="section-"]'],
     sectionTitle: ['.sectionname', '[aria-label]'],
-    resources: ['.activity.resource a', '.modtype_resource a'], // Dosyalar
-    folders: ['.activity.folder a', '.modtype_folder a'],       // Klasörler
-    pages: ['.activity.url a', '.activity.page a']              // Linkler
+    resources: ['.activity.resource a', '.modtype_resource a'], 
+    folders: ['.activity.folder a', '.modtype_folder a'],       
+    pages: ['.activity.url a', '.activity.page a']              
 };
 
-// Yardımcı: Listeden uyan ilk elementi bul
 function findElement(selectorList, parent = document) {
     for (let sel of selectorList) {
         const el = parent.querySelector(sel);
@@ -19,13 +17,28 @@ function findElement(selectorList, parent = document) {
     return null;
 }
 
-// Yardımcı: Listeden uyan TÜM elementleri bul
 function findAllElements(selectorList, parent = document) {
     for (let sel of selectorList) {
         const els = parent.querySelectorAll(sel);
         if (els.length > 0) return els;
     }
     return [];
+}
+
+// 🛡️ ABSOLUTE FIX: Blob to Base64 String
+// Strings are primitives and cannot be "XrayWrapped" by Firefox.
+function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const base64String = reader.result
+                .replace("data:", "")
+                .replace(/^.+,/, "");
+            resolve(base64String);
+        };
+        reader.onerror = () => reject(new Error("Failed to convert blob to base64"));
+        reader.readAsDataURL(blob);
+    });
 }
 
 // --- 2. INJECT BUTTONS ---
@@ -81,27 +94,11 @@ function getUniqueName(name, usedSet) {
     return finalName;
 }
 
-function wrapLocalPage(title, contentHtml) {
-    const styles = `
-        body { font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.6; color: #333; margin: 0; background: #f9f9f9; }
-        .page-container { max-width: 800px; margin: 40px auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
-        h1.local-title { color: #d6001c; border-bottom: 2px solid #eee; padding-bottom: 15px; margin-top: 0; }
-        .meta { font-size: 0.85em; color: #888; margin-bottom: 30px; }
-        img { max-width: 100%; height: auto; }
-        a { color: #d6001c; text-decoration: none; }
-        table { border-collapse: collapse; width: 100%; margin: 20px 0; }
-        th, td { border: 1px solid #ddd; padding: 8px; }
-        th { background-color: #f2f2f2; }
-    `;
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title><style>${styles}</style></head><body><div class="page-container"><h1 class="local-title">${title}</h1><div class="meta">Archived from LMS • Offline Mode</div><div class="moodle-content">${contentHtml}</div></div></body></html>`;
-}
-
 function detectTypeFromDOM(linkElement) {
     const icon = linkElement.querySelector('img.icon');
     let src = icon ? icon.src.toLowerCase() : "";
     const href = linkElement.href.toLowerCase();
     
-    // Klasör Tespiti
     if (href.includes('/mod/folder/')) return 'FOLDER';
 
     if (href.endsWith('.pdf')) return 'PDF';
@@ -118,7 +115,7 @@ function detectTypeFromDOM(linkElement) {
     if (src.includes('word')) return 'DOC';
     if (src.includes('spreadsheet') || src.includes('excel')) return 'XLS';
     if (src.includes('archive') || src.includes('zip')) return 'ZIP';
-    if (src.includes('folder')) return 'FOLDER'; // Icon check fallback
+    if (src.includes('folder')) return 'FOLDER';
     
     return 'OTHER';
 }
@@ -141,17 +138,14 @@ function promptUserForSections(sectionsMap) {
             boxShadow: '0 10px 25px rgba(0,0,0,0.2)', fontFamily: 'Segoe UI, sans-serif', overflow: 'hidden'
         });
 
-        // Header
         const header = document.createElement('div');
         Object.assign(header.style, { padding: '20px', borderBottom: '1px solid #eee' });
         header.innerHTML = `<h3 style="margin:0; color:#d6001c;">Download Manager</h3><p style="margin:5px 0 0; color:#666; font-size:0.9em;">Select materials to archive.</p>`;
         modal.appendChild(header);
 
-        // Content
         const content = document.createElement('div');
         Object.assign(content.style, { display: 'flex', flexGrow: 1, overflow: 'hidden' });
         
-        // Left: Weeks
         const leftPanel = document.createElement('div');
         Object.assign(leftPanel.style, { width: '55%', borderRight: '1px solid #eee', overflowY: 'auto', padding: '15px' });
         leftPanel.innerHTML = `<div style="font-weight:bold; margin-bottom:10px; color:#2c3e50;">📅 Weeks / Topics</div>`;
@@ -166,7 +160,6 @@ function promptUserForSections(sectionsMap) {
             weekCheckboxes.push(chk);
         });
 
-        // Right: Filters
         const rightPanel = document.createElement('div');
         Object.assign(rightPanel.style, { width: '45%', padding: '15px', backgroundColor: '#f9f9f9' });
         rightPanel.innerHTML = `<div style="font-weight:bold; margin-bottom:10px; color:#2c3e50;">📂 File Types</div>`;
@@ -188,7 +181,6 @@ function promptUserForSections(sectionsMap) {
         content.append(leftPanel, rightPanel);
         modal.appendChild(content);
 
-        // Footer
         const footer = document.createElement('div');
         Object.assign(footer.style, { padding: '15px 20px', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between', background: 'white' });
         
@@ -217,14 +209,13 @@ function promptUserForSections(sectionsMap) {
     });
 }
 
-// --- 5. MAIN DOWNLOAD LOGIC (Düzeltildi) ---
+// --- 5. MAIN DOWNLOAD LOGIC (BASE64 PRIMITIVE STRATEGY) ---
 
 async function startDownloadProcess() {
     const btn = this;
     const originalText = btn.innerText;
     
     try {
-        // Eksik olan findAllElements artık tanımlı
         const sectionsList = findAllElements(OZU_SELECTORS.sections);
         if (!sectionsList || sectionsList.length === 0) { alert("No sections found on this page."); return; }
 
@@ -271,20 +262,12 @@ async function startDownloadProcess() {
 
                 if (url && name) {
                     if (detectedType === 'FOLDER') {
-                        // Folder
-                        const item = { 
-                            type: 'folder-fetch', 
-                            folder: folder, 
-                            url: url, 
-                            folderName: name,
-                            sectionPath: sectionName 
-                        };
+                        const item = { type: 'folder-fetch', folder: folder, url: url, folderName: name };
                         downloadQueue.push(item);
                         structEntry.links.push({ type: 'FOLDER', name: name + " (See Subfolder)", url: url });
                         totalItemsFound++;
                     } else {
-                        // File
-                        const item = { type: 'file', folder, url, originalName: name, finalFileName: name, sectionPath: sectionName };
+                        const item = { type: 'file', folder, url, originalName: name, finalFileName: name };
                         downloadQueue.push(item);
                         structEntry.files.push(item);
                         totalItemsFound++;
@@ -292,39 +275,34 @@ async function startDownloadProcess() {
                 }
             });
 
-            // Pages
             if (allowedTypes.includes('OTHER')) {
                 const pageLinks = findAllElements(OZU_SELECTORS.pages, section);
                 if(pageLinks) {
                     pageLinks.forEach(link => {
                         let name = link.querySelector('.instancename')?.childNodes[0].textContent || link.innerText;
                         name = name.trim();
-                        if (name && link.href) {
-                            structEntry.links.push({ type: 'LINK', name: name, url: link.href });
-                        }
+                        if (name && link.href) structEntry.links.push({ type: 'LINK', name: name, url: link.href });
                     });
                 }
             }
-
             if (structEntry.files.length > 0 || structEntry.links.length > 0) courseStructure.push(structEntry);
         });
 
         if (totalItemsFound === 0) { alert("No matching content found."); btn.innerText=originalText; btn.disabled=false; return; }
 
-        // --- DOWNLOAD ---
+        // --- DOWNLOAD PHASE ---
         btn.innerText = `⏳ Downloading...`;
         
         const fetchPromises = downloadQueue.map(async (item) => {
             try {
                 if (item.type === 'folder-fetch') {
-                    // Kalsör İndirme Mantığı
+                    // --- FOLDER LOGIC ---
                     const response = await fetch(item.url);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const htmlText = await response.text();
                     const doc = new DOMParser().parseFromString(htmlText, 'text/html');
                     
                     const subZipFolder = item.folder.folder(item.folderName);
-                    // Ozyegin Moodle folder yapısı için selector
                     const fileLinks = doc.querySelectorAll('.fp-filename-icon a, .file-picker a'); 
                     
                     if (fileLinks.length === 0) {
@@ -340,10 +318,11 @@ async function startDownloadProcess() {
                             
                             const subRes = await fetch(subUrl);
                             const subBlob = await subRes.blob();
-                            // Fix for JSZip Firefox bug: Use ArrayBuffer
-                            const subBuffer = await subBlob.arrayBuffer(); 
                             
-                            subZipFolder.file(subName, subBuffer);
+                            // 🔥 FIX: BASE64
+                            const base64Data = await blobToBase64(subBlob);
+                            subZipFolder.file(subName, base64Data, {base64: true});
+
                         } catch (subErr) {
                             subZipFolder.file("Error_File.txt", "Failed: " + subErr.message);
                         }
@@ -351,16 +330,16 @@ async function startDownloadProcess() {
                     await Promise.allSettled(subPromises);
                 
                 } else {
-                    // Normal Dosya İndirme
+                    // --- FILE LOGIC ---
                     const response = await fetch(item.url);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     
                     const contentType = response.headers.get('content-type');
-                    if (contentType && contentType.includes('text/html')) throw new Error("Link redirected to webpage (Login required?)");
+                    if (contentType && contentType.includes('text/html')) throw new Error("Redirected to webpage (Login required?)");
 
                     const blob = await response.blob();
-                    const buffer = await blob.arrayBuffer(); // Fix for JSZip Firefox bug
                     
+                    // Extension check
                     if (!item.finalFileName.includes('.')) {
                         const t = blob.type;
                         if (t.includes('pdf')) item.finalFileName += ".pdf";
@@ -369,8 +348,12 @@ async function startDownloadProcess() {
                         else if (t.includes('zip')) item.finalFileName += ".zip";
                         else if (t.includes('excel') || t.includes('sheet')) item.finalFileName += ".xlsx";
                     }
+
+                    // 🔥 FIX: BASE64
+                    const base64Data = await blobToBase64(blob);
                     
-                    item.folder.file(item.finalFileName, buffer);
+                    // Note: {base64: true} tells JSZip to decode it back to binary
+                    item.folder.file(item.finalFileName, base64Data, {base64: true});
                 }
             } catch (err) {
                 const msg = `FAILED: ${item.originalName || item.folderName} - ${err.message}`;
