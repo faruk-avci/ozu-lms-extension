@@ -1,8 +1,40 @@
-// 1. Inject Buttons
+// --- 1. CONFIGURATION & HELPERS (Eksik olan kısım burasıydı) ---
+
+const OZU_SELECTORS = {
+    // Özyeğin Moodle Yapısı
+    header: ['.page-header-headings', '.page-header h1', 'h1'], 
+    sections: ['ul.weeks li.section', 'ul.topics li.section', 'li[id^="section-"]'],
+    sectionTitle: ['.sectionname', '[aria-label]'],
+    resources: ['.activity.resource a', '.modtype_resource a'], // Dosyalar
+    folders: ['.activity.folder a', '.modtype_folder a'],       // Klasörler
+    pages: ['.activity.url a', '.activity.page a']              // Linkler
+};
+
+// Yardımcı: Listeden uyan ilk elementi bul
+function findElement(selectorList, parent = document) {
+    for (let sel of selectorList) {
+        const el = parent.querySelector(sel);
+        if (el) return el;
+    }
+    return null;
+}
+
+// Yardımcı: Listeden uyan TÜM elementleri bul
+function findAllElements(selectorList, parent = document) {
+    for (let sel of selectorList) {
+        const els = parent.querySelectorAll(sel);
+        if (els.length > 0) return els;
+    }
+    return [];
+}
+
+// --- 2. INJECT BUTTONS ---
+
 function addDownloadButton() {
-    const header = document.querySelector('.page-header-headings') || document.querySelector('h1');
-    if (header) {
+    const header = findElement(OZU_SELECTORS.header);
+    if (header && !document.getElementById('ozu-dl-btn')) {
         const div = document.createElement('div');
+        div.id = 'ozu-dl-btn';
         div.style.display = "flex";
         div.style.gap = "10px";
         div.style.marginTop = "10px";
@@ -25,12 +57,12 @@ function addDownloadButton() {
     }
 }
 
-// 2. Helper: Sanitize Filenames
+// --- 3. UTILITY FUNCTIONS ---
+
 function sanitizeFilename(name) {
     return name.replace(/[^a-z0-9áéíóúñü \.\-_]/gim, "").trim();
 }
 
-// 3. Helper: Deduplicate Filenames
 function getUniqueName(name, usedSet) {
     let finalName = name;
     let counter = 1;
@@ -49,7 +81,6 @@ function getUniqueName(name, usedSet) {
     return finalName;
 }
 
-// 4. Helper: Wrap Page Content (Offline View)
 function wrapLocalPage(title, contentHtml) {
     const styles = `
         body { font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.6; color: #333; margin: 0; background: #f9f9f9; }
@@ -65,13 +96,14 @@ function wrapLocalPage(title, contentHtml) {
     return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title><style>${styles}</style></head><body><div class="page-container"><h1 class="local-title">${title}</h1><div class="meta">Archived from LMS • Offline Mode</div><div class="moodle-content">${contentHtml}</div></div></body></html>`;
 }
 
-// 5. Helper: Advanced File Type Detection
 function detectTypeFromDOM(linkElement) {
     const icon = linkElement.querySelector('img.icon');
     let src = icon ? icon.src.toLowerCase() : "";
     const href = linkElement.href.toLowerCase();
     
-    // Check HREF extensions first (more accurate)
+    // Klasör Tespiti
+    if (href.includes('/mod/folder/')) return 'FOLDER';
+
     if (href.endsWith('.pdf')) return 'PDF';
     if (href.match(/\.(ppt|pptx)$/)) return 'PPT';
     if (href.match(/\.(doc|docx)$/)) return 'DOC';
@@ -81,30 +113,20 @@ function detectTypeFromDOM(linkElement) {
     if (href.match(/\.(py|java|c|cpp|h|cs|js|html|css|php|sql)$/)) return 'CODE';
     if (href.match(/\.(mp4|mov|avi|mp3|wav)$/)) return 'MEDIA';
 
-    // Fallback to Icon URL
     if (src.includes('pdf')) return 'PDF';
     if (src.includes('powerpoint')) return 'PPT';
     if (src.includes('word')) return 'DOC';
     if (src.includes('spreadsheet') || src.includes('excel')) return 'XLS';
     if (src.includes('archive') || src.includes('zip')) return 'ZIP';
-    if (src.includes('image') || src.includes('jpeg')) return 'IMG';
-    if (src.includes('text') || src.includes('source')) return 'CODE';
-    if (src.includes('video') || src.includes('audio')) return 'MEDIA';
+    if (src.includes('folder')) return 'FOLDER'; // Icon check fallback
     
     return 'OTHER';
 }
 
-// 6. Helper: Modal Logic with Expanded Filters
+// --- 4. MODAL LOGIC ---
+
 function promptUserForSections(sectionsMap) {
     return new Promise((resolve) => {
-        // --- PRE-SCAN FOR TYPES ---
-        const availableTypes = new Set();
-        sectionsMap.forEach(sec => {
-            sec.element.querySelectorAll('.activity.resource a').forEach(link => {
-                availableTypes.add(detectTypeFromDOM(link));
-            });
-        });
-
         const overlay = document.createElement('div');
         Object.assign(overlay.style, {
             position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
@@ -125,7 +147,7 @@ function promptUserForSections(sectionsMap) {
         header.innerHTML = `<h3 style="margin:0; color:#d6001c;">Download Manager</h3><p style="margin:5px 0 0; color:#666; font-size:0.9em;">Select materials to archive.</p>`;
         modal.appendChild(header);
 
-        // Content Area
+        // Content
         const content = document.createElement('div');
         Object.assign(content.style, { display: 'flex', flexGrow: 1, overflow: 'hidden' });
         
@@ -150,24 +172,10 @@ function promptUserForSections(sectionsMap) {
         rightPanel.innerHTML = `<div style="font-weight:bold; margin-bottom:10px; color:#2c3e50;">📂 File Types</div>`;
         
         const typeCheckboxes = {};
-        const typeLabels = { 
-            'PDF': '📄 PDF Documents', 
-            'PPT': '📊 PowerPoint (PPTX)', 
-            'DOC': '📝 Word (DOCX)', 
-            'XLS': '📈 Excel (XLSX, CSV)', 
-            'ZIP': '📦 Archives (ZIP, RAR)',
-            'CODE': '💻 Code & Text (py, c, txt)',
-            'IMG': '🖼️ Images',
-            'MEDIA': '🎥 Audio / Video',
-            'OTHER': '📁 Other Files'
-        };
-        
-        // Show categories
-        const filtersToShow = ['PDF', 'PPT', 'DOC', 'XLS', 'ZIP', 'CODE', 'IMG', 'MEDIA', 'OTHER'];
-        filtersToShow.forEach(type => {
-            // Optional: Hide if not present on page (Remove this if you want to show all always)
-            // if (!availableTypes.has(type) && type !== 'OTHER') return; 
+        const types = ['FOLDER', 'PDF', 'PPT', 'DOC', 'XLS', 'ZIP', 'CODE', 'IMG', 'MEDIA', 'OTHER'];
+        const typeLabels = { 'FOLDER': '📁 Sub-Folders', 'PDF': '📄 PDF Documents', 'PPT': '📊 PowerPoint', 'DOC': '📝 Word Docs', 'XLS': '📈 Excel / CSV', 'ZIP': '📦 Archives', 'CODE': '💻 Code', 'IMG': '🖼️ Images', 'MEDIA': '🎥 Media', 'OTHER': '📁 Other' };
 
+        types.forEach(type => {
             const label = document.createElement('label');
             Object.assign(label.style, { display: 'flex', alignItems: 'center', padding: '6px 0', cursor: 'pointer', fontSize:'0.9em' });
             const chk = document.createElement('input');
@@ -209,20 +217,19 @@ function promptUserForSections(sectionsMap) {
     });
 }
 
-// 7. Main Logic
-// --- 5. MAIN DOWNLOAD LOGIC (FIXED FOR FIREFOX/JSZIP ERROR) ---
+// --- 5. MAIN DOWNLOAD LOGIC (Düzeltildi) ---
 
 async function startDownloadProcess() {
     const btn = this;
     const originalText = btn.innerText;
     
     try {
-        // Universal Selection
-        const sectionsList = findAllElements(MOODLE_SELECTORS.sections);
+        // Eksik olan findAllElements artık tanımlı
+        const sectionsList = findAllElements(OZU_SELECTORS.sections);
         if (!sectionsList || sectionsList.length === 0) { alert("No sections found on this page."); return; }
 
         const sectionsMap = Array.from(sectionsList).map(section => {
-            let name = findElement(MOODLE_SELECTORS.sectionTitle, section)?.innerText || section.id || "Unknown Section";
+            let name = findElement(OZU_SELECTORS.sectionTitle, section)?.innerText || section.id || "Unknown Section";
             return { element: section, name: sanitizeFilename(name) };
         });
 
@@ -249,8 +256,8 @@ async function startDownloadProcess() {
             const structEntry = { title: sectionName, files: [], links: [] };
 
             const allLinks = [
-                ...findAllElements(MOODLE_SELECTORS.resources, section),
-                ...findAllElements(MOODLE_SELECTORS.folders, section)
+                ...findAllElements(OZU_SELECTORS.resources, section),
+                ...findAllElements(OZU_SELECTORS.folders, section)
             ];
 
             allLinks.forEach((link) => {
@@ -264,6 +271,7 @@ async function startDownloadProcess() {
 
                 if (url && name) {
                     if (detectedType === 'FOLDER') {
+                        // Folder
                         const item = { 
                             type: 'folder-fetch', 
                             folder: folder, 
@@ -275,6 +283,7 @@ async function startDownloadProcess() {
                         structEntry.links.push({ type: 'FOLDER', name: name + " (See Subfolder)", url: url });
                         totalItemsFound++;
                     } else {
+                        // File
                         const item = { type: 'file', folder, url, originalName: name, finalFileName: name, sectionPath: sectionName };
                         downloadQueue.push(item);
                         structEntry.files.push(item);
@@ -283,9 +292,9 @@ async function startDownloadProcess() {
                 }
             });
 
-            // Pages/Links
+            // Pages
             if (allowedTypes.includes('OTHER')) {
-                const pageLinks = findAllElements(MOODLE_SELECTORS.pages, section);
+                const pageLinks = findAllElements(OZU_SELECTORS.pages, section);
                 if(pageLinks) {
                     pageLinks.forEach(link => {
                         let name = link.querySelector('.instancename')?.childNodes[0].textContent || link.innerText;
@@ -302,19 +311,20 @@ async function startDownloadProcess() {
 
         if (totalItemsFound === 0) { alert("No matching content found."); btn.innerText=originalText; btn.disabled=false; return; }
 
-        // --- DOWNLOAD PHASE ---
+        // --- DOWNLOAD ---
         btn.innerText = `⏳ Downloading...`;
         
         const fetchPromises = downloadQueue.map(async (item) => {
             try {
-                // --- A. FOLDER SUB-FETCH LOGIC ---
                 if (item.type === 'folder-fetch') {
+                    // Kalsör İndirme Mantığı
                     const response = await fetch(item.url);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const htmlText = await response.text();
                     const doc = new DOMParser().parseFromString(htmlText, 'text/html');
                     
                     const subZipFolder = item.folder.folder(item.folderName);
+                    // Ozyegin Moodle folder yapısı için selector
                     const fileLinks = doc.querySelectorAll('.fp-filename-icon a, .file-picker a'); 
                     
                     if (fileLinks.length === 0) {
@@ -329,33 +339,28 @@ async function startDownloadProcess() {
                             subName = sanitizeFilename(subName);
                             
                             const subRes = await fetch(subUrl);
-                            
-                            // 🛠️ FIX: Blob yerine ArrayBuffer kullanıyoruz
                             const subBlob = await subRes.blob();
-                            const subArrayBuffer = await subBlob.arrayBuffer();
+                            // Fix for JSZip Firefox bug: Use ArrayBuffer
+                            const subBuffer = await subBlob.arrayBuffer(); 
                             
-                            subZipFolder.file(subName, subArrayBuffer);
+                            subZipFolder.file(subName, subBuffer);
                         } catch (subErr) {
                             subZipFolder.file("Error_File.txt", "Failed: " + subErr.message);
                         }
                     });
-
                     await Promise.allSettled(subPromises);
                 
-                } 
-                // --- B. STANDARD FILE DOWNLOAD ---
-                else {
+                } else {
+                    // Normal Dosya İndirme
                     const response = await fetch(item.url);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     
                     const contentType = response.headers.get('content-type');
                     if (contentType && contentType.includes('text/html')) throw new Error("Link redirected to webpage (Login required?)");
 
-                    // 🛠️ FIX: Önce Blob al (MIME type tespiti için), sonra ArrayBuffer'a çevir (JSZip hatasını önlemek için)
                     const blob = await response.blob();
-                    const arrayBuffer = await blob.arrayBuffer(); // <--- CRITICAL FIX HERE
+                    const buffer = await blob.arrayBuffer(); // Fix for JSZip Firefox bug
                     
-                    // Ext fix using the Blob's type
                     if (!item.finalFileName.includes('.')) {
                         const t = blob.type;
                         if (t.includes('pdf')) item.finalFileName += ".pdf";
@@ -365,8 +370,7 @@ async function startDownloadProcess() {
                         else if (t.includes('excel') || t.includes('sheet')) item.finalFileName += ".xlsx";
                     }
                     
-                    // JSZip'e ArrayBuffer veriyoruz, Blob değil.
-                    item.folder.file(item.finalFileName, arrayBuffer);
+                    item.folder.file(item.finalFileName, buffer);
                 }
             } catch (err) {
                 const msg = `FAILED: ${item.originalName || item.folderName} - ${err.message}`;
@@ -401,10 +405,10 @@ async function startDownloadProcess() {
     }
 }
 
-// 8. Index Generator (Same as before)
+// 6. Index Generator
 function generateIndexHtml(zip, structure, title) {
     let totalFiles = 0; structure.forEach(s => totalFiles += s.files.length + s.links.length);
-    const styles = `body{font-family:'Segoe UI',sans-serif;background:#f4f6f8;color:#333;margin:0}.container{max-width:900px;margin:40px auto;padding:20px}.header{background:white;padding:30px;border-radius:12px;border-top:5px solid #d6001c;text-align:center;box-shadow:0 4px 10px rgba(0,0,0,0.05)}.search{width:100%;padding:12px;border:2px solid #eee;border-radius:25px;margin-top:15px;outline:none}.section{background:white;border-radius:8px;margin-top:20px;overflow:hidden}.s-head{background:#2c3e50;color:white;padding:12px 20px;font-weight:600}ul{list-style:none;padding:0;margin:0}li{padding:12px 20px;border-bottom:1px solid #f9f9f9;display:flex;align-items:center}a{text-decoration:none;color:#333;flex:1}.badge{font-size:0.7em;padding:3px 8px;border-radius:4px;margin-right:10px;color:white;min-width:50px;text-align:center;font-weight:bold}.b-file{background:#3498db}.b-page{background:#e67e22}.b-link{background:#9b59b6}.b-err{background:#e74c3c}.hidden{display:none!important}`;
+    const styles = `body{font-family:'Segoe UI',sans-serif;background:#f4f6f8;color:#333;margin:0}.container{max-width:900px;margin:40px auto;padding:20px}.header{background:white;padding:30px;border-radius:12px;border-top:5px solid #d6001c;text-align:center;box-shadow:0 4px 10px rgba(0,0,0,0.05)}.search{width:100%;padding:12px;border:2px solid #eee;border-radius:25px;margin-top:15px;outline:none}.section{background:white;border-radius:8px;margin-top:20px;overflow:hidden}.s-head{background:#2c3e50;color:white;padding:12px 20px;font-weight:600}ul{list-style:none;padding:0;margin:0}li{padding:12px 20px;border-bottom:1px solid #f9f9f9;display:flex;align-items:center}a{text-decoration:none;color:#333;flex:1}.badge{font-size:0.7em;padding:3px 8px;border-radius:4px;margin-right:10px;color:white;min-width:50px;text-align:center;font-weight:bold}.b-file{background:#3498db}.b-folder{background:#f39c12}.b-link{background:#9b59b6}.b-err{background:#e74c3c}.hidden{display:none!important}`;
     const script = `function filter(){const v=document.getElementById('s').value.toLowerCase();document.querySelectorAll('.section').forEach(s=>{let m=false;s.querySelectorAll('li').forEach(l=>{const t=l.innerText.toLowerCase();if(t.includes(v)){l.classList.remove('hidden');m=true}else l.classList.add('hidden')});const ti=s.querySelector('.s-head').innerText.toLowerCase();if(ti.includes(v)||m){s.classList.remove('hidden');if(ti.includes(v))s.querySelectorAll('li').forEach(l=>l.classList.remove('hidden'))}else s.classList.add('hidden')})}`;
     let html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title><style>${styles}</style></head><body><div class="container"><div class="header"><h1>${title}</h1><p>${structure.length} Weeks • ${totalFiles} Items</p><input type="text" id="s" class="search" onkeyup="filter()" placeholder="🔍 Search..."></div>`;
     structure.forEach(sec => {
@@ -413,31 +417,41 @@ function generateIndexHtml(zip, structure, title) {
             if(f.error) html += `<li><span class="badge b-err">ERR</span>${f.originalName} (See Log)</li>`;
             else html += `<li><span class="badge ${f.isLocalPage?'b-page':'b-file'}">${f.isLocalPage?'PAGE':'FILE'}</span><a href="${encodeURIComponent(sec.title)}/${encodeURIComponent(f.finalFileName)}" target="_blank">${f.originalName}</a></li>`;
         });
-        sec.links.forEach(l => html += `<li><span class="badge b-link">${l.type.toUpperCase()}</span><a href="${l.url}" target="_blank">${l.name} ↗</a></li>`);
+        sec.links.forEach(l => {
+            const isFolder = l.type === 'FOLDER';
+            html += `<li><span class="badge ${isFolder?'b-folder':'b-link'}">${isFolder?'DIR':'LINK'}</span><a href="${l.url}" target="_blank">${l.name} ↗</a></li>`;
+        });
         html += `</ul></div>`;
     });
     html += `</div><script>${script}</script></body></html>`;
     zip.file("index.html", html);
 }
 
-// 9. Grade Export
+// 7. Grade Export
 async function exportGrades() {
     const btn = this; const orig = btn.innerText; btn.innerText="Fetching...";
     try {
         const id = new URLSearchParams(window.location.search).get('id');
-        const r = await fetch(`https://lms.ozyegin.edu.tr/grade/report/user/index.php?id=${id}`);
+        const origin = window.location.origin;
+        const r = await fetch(`${origin}/grade/report/user/index.php?id=${id}`);
+        if(!r.ok) throw new Error("Grade page not found");
         const t = await r.text();
         const doc = new DOMParser().parseFromString(t, "text/html");
+        
         let csv = "Item,Grade,Range,Percentage,Feedback\n";
-        doc.querySelectorAll('table tbody tr').forEach(row => {
+        const rows = doc.querySelectorAll('table.user-grade tbody tr, table.generaltable tbody tr');
+        
+        rows.forEach(row => {
             const c = Array.from(row.querySelectorAll('td,th')).map(x=>x.innerText.replace(/,/g," ").trim());
-            if(c.length>1) csv += c.slice(0,5).join(",")+"\n";
+            if(c.length > 2) csv += c.slice(0,5).join(",")+"\n";
         });
+        
         const a = document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
         a.download=`Grades_${id}.csv`; a.click(); btn.innerText="✅ Done";
-    } catch(e) { console.error(e); btn.innerText="❌ Error"; }
+    } catch(e) { console.error(e); alert("Could not fetch grades."); btn.innerText="❌ Error"; }
     setTimeout(()=>btn.innerText=orig, 2000);
 }
 
+// Init
 window.addEventListener('load', addDownloadButton);
 if (document.readyState === 'complete') addDownloadButton();
