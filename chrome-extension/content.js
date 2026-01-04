@@ -26,7 +26,6 @@ function findAllElements(selectorList, parent = document) {
 }
 
 // 🛡️ ABSOLUTE FIX: Blob to Base64 String
-// Strings are primitives and cannot be "XrayWrapped" by Firefox.
 function blobToBase64(blob) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -209,7 +208,7 @@ function promptUserForSections(sectionsMap) {
     });
 }
 
-// --- 5. MAIN DOWNLOAD LOGIC (BASE64 PRIMITIVE STRATEGY) ---
+// --- 5. MAIN DOWNLOAD LOGIC ---
 
 async function startDownloadProcess() {
     const btn = this;
@@ -244,7 +243,8 @@ async function startDownloadProcess() {
             const sectionName = sectionData.name;
             const folder = zip.folder(sectionName);
             const usedFilenames = new Set();
-            const structEntry = { title: sectionName, files: [], links: [] };
+            // Separate folders array for structure
+            const structEntry = { title: sectionName, files: [], links: [], folders: [] }; 
 
             const allLinks = [
                 ...findAllElements(OZU_SELECTORS.resources, section),
@@ -262,9 +262,18 @@ async function startDownloadProcess() {
 
                 if (url && name) {
                     if (detectedType === 'FOLDER') {
-                        const item = { type: 'folder-fetch', folder: folder, url: url, folderName: name };
+                        // Create structure reference for this folder
+                        const folderStructRef = { name: name, files: [] };
+                        structEntry.folders.push(folderStructRef);
+
+                        const item = { 
+                            type: 'folder-fetch', 
+                            folder: folder, 
+                            url: url, 
+                            folderName: name, 
+                            structRef: folderStructRef // Pass ref to queue
+                        };
                         downloadQueue.push(item);
-                        structEntry.links.push({ type: 'FOLDER', name: name + " (See Subfolder)", url: url });
                         totalItemsFound++;
                     } else {
                         const item = { type: 'file', folder, url, originalName: name, finalFileName: name };
@@ -285,7 +294,9 @@ async function startDownloadProcess() {
                     });
                 }
             }
-            if (structEntry.files.length > 0 || structEntry.links.length > 0) courseStructure.push(structEntry);
+            if (structEntry.files.length > 0 || structEntry.links.length > 0 || structEntry.folders.length > 0) {
+                courseStructure.push(structEntry);
+            }
         });
 
         if (totalItemsFound === 0) { alert("No matching content found."); btn.innerText=originalText; btn.disabled=false; return; }
@@ -316,10 +327,15 @@ async function startDownloadProcess() {
                             let subName = subLink.querySelector('.fp-filename')?.innerText || subLink.innerText;
                             subName = sanitizeFilename(subName);
                             
+                            // Add file to structure for HTML generation
+                            if (item.structRef) {
+                                item.structRef.files.push(subName);
+                            }
+
                             const subRes = await fetch(subUrl);
                             const subBlob = await subRes.blob();
                             
-                            // 🔥 FIX: BASE64
+                            // Base64 Fix
                             const base64Data = await blobToBase64(subBlob);
                             subZipFolder.file(subName, base64Data, {base64: true});
 
@@ -339,7 +355,6 @@ async function startDownloadProcess() {
 
                     const blob = await response.blob();
                     
-                    // Extension check
                     if (!item.finalFileName.includes('.')) {
                         const t = blob.type;
                         if (t.includes('pdf')) item.finalFileName += ".pdf";
@@ -349,10 +364,8 @@ async function startDownloadProcess() {
                         else if (t.includes('excel') || t.includes('sheet')) item.finalFileName += ".xlsx";
                     }
 
-                    // 🔥 FIX: BASE64
+                    // Base64 Fix
                     const base64Data = await blobToBase64(blob);
-                    
-                    // Note: {base64: true} tells JSZip to decode it back to binary
                     item.folder.file(item.finalFileName, base64Data, {base64: true});
                 }
             } catch (err) {
@@ -388,24 +401,68 @@ async function startDownloadProcess() {
     }
 }
 
-// 6. Index Generator
+// 6. Index Generator (Updated for Collapsible Folders)
 function generateIndexHtml(zip, structure, title) {
-    let totalFiles = 0; structure.forEach(s => totalFiles += s.files.length + s.links.length);
-    const styles = `body{font-family:'Segoe UI',sans-serif;background:#f4f6f8;color:#333;margin:0}.container{max-width:900px;margin:40px auto;padding:20px}.header{background:white;padding:30px;border-radius:12px;border-top:5px solid #d6001c;text-align:center;box-shadow:0 4px 10px rgba(0,0,0,0.05)}.search{width:100%;padding:12px;border:2px solid #eee;border-radius:25px;margin-top:15px;outline:none}.section{background:white;border-radius:8px;margin-top:20px;overflow:hidden}.s-head{background:#2c3e50;color:white;padding:12px 20px;font-weight:600}ul{list-style:none;padding:0;margin:0}li{padding:12px 20px;border-bottom:1px solid #f9f9f9;display:flex;align-items:center}a{text-decoration:none;color:#333;flex:1}.badge{font-size:0.7em;padding:3px 8px;border-radius:4px;margin-right:10px;color:white;min-width:50px;text-align:center;font-weight:bold}.b-file{background:#3498db}.b-folder{background:#f39c12}.b-link{background:#9b59b6}.b-err{background:#e74c3c}.hidden{display:none!important}`;
+    let totalFiles = 0; 
+    structure.forEach(s => {
+        totalFiles += s.files.length;
+        totalFiles += s.links.length;
+        // Add files inside folders to count
+        s.folders.forEach(f => totalFiles += f.files.length);
+    });
+
+    const styles = `body{font-family:'Segoe UI',sans-serif;background:#f4f6f8;color:#333;margin:0}.container{max-width:900px;margin:40px auto;padding:20px}.header{background:white;padding:30px;border-radius:12px;border-top:5px solid #d6001c;text-align:center;box-shadow:0 4px 10px rgba(0,0,0,0.05)}.search{width:100%;padding:12px;border:2px solid #eee;border-radius:25px;margin-top:15px;outline:none}.section{background:white;border-radius:8px;margin-top:20px;overflow:hidden}.s-head{background:#2c3e50;color:white;padding:12px 20px;font-weight:600}ul{list-style:none;padding:0;margin:0}li{padding:12px 20px;border-bottom:1px solid #f9f9f9;display:flex;align-items:center}a{text-decoration:none;color:#333;flex:1}.badge{font-size:0.7em;padding:3px 8px;border-radius:4px;margin-right:10px;color:white;min-width:50px;text-align:center;font-weight:bold}.b-file{background:#3498db}.b-folder{background:#f39c12}.b-link{background:#9b59b6}.b-err{background:#e74c3c}.hidden{display:none!important}
+    /* New Styles for Details/Summary */
+    details { width: 100%; }
+    summary { cursor: pointer; display: flex; align-items: center; outline: none; }
+    summary:hover { color: #d6001c; }
+    details ul { margin-top: 5px; border-left: 3px solid #eee; margin-left: 20px; padding-left: 10px; }
+    details ul li { border-bottom: none; padding: 6px 10px; font-size: 0.95em; }
+    `;
+    
     const script = `function filter(){const v=document.getElementById('s').value.toLowerCase();document.querySelectorAll('.section').forEach(s=>{let m=false;s.querySelectorAll('li').forEach(l=>{const t=l.innerText.toLowerCase();if(t.includes(v)){l.classList.remove('hidden');m=true}else l.classList.add('hidden')});const ti=s.querySelector('.s-head').innerText.toLowerCase();if(ti.includes(v)||m){s.classList.remove('hidden');if(ti.includes(v))s.querySelectorAll('li').forEach(l=>l.classList.remove('hidden'))}else s.classList.add('hidden')})}`;
+    
     let html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title><style>${styles}</style></head><body><div class="container"><div class="header"><h1>${title}</h1><p>${structure.length} Weeks • ${totalFiles} Items</p><input type="text" id="s" class="search" onkeyup="filter()" placeholder="🔍 Search..."></div>`;
+    
     structure.forEach(sec => {
         html += `<div class="section"><div class="s-head">${sec.title}</div><ul>`;
+        
+        // 1. Files
         sec.files.forEach(f => {
             if(f.error) html += `<li><span class="badge b-err">ERR</span>${f.originalName} (See Log)</li>`;
             else html += `<li><span class="badge ${f.isLocalPage?'b-page':'b-file'}">${f.isLocalPage?'PAGE':'FILE'}</span><a href="${encodeURIComponent(sec.title)}/${encodeURIComponent(f.finalFileName)}" target="_blank">${f.originalName}</a></li>`;
         });
+        
+        // 2. Folders (New Collapsible Logic)
+        if(sec.folders && sec.folders.length > 0) {
+            sec.folders.forEach(dir => {
+                html += `<li>
+                    <details>
+                        <summary>
+                            <span class="badge b-folder">DIR</span> ${dir.name}
+                        </summary>
+                        <ul>`;
+                
+                if(dir.files.length === 0) {
+                    html += `<li style="color:#aaa;">Empty folder</li>`;
+                } else {
+                    dir.files.forEach(fName => {
+                        const path = `${encodeURIComponent(sec.title)}/${encodeURIComponent(dir.name)}/${encodeURIComponent(fName)}`;
+                        html += `<li><span class="badge b-file" style="transform:scale(0.85)">FILE</span><a href="${path}" target="_blank">${fName}</a></li>`;
+                    });
+                }
+                html += `</ul></details></li>`;
+            });
+        }
+
+        // 3. Links
         sec.links.forEach(l => {
-            const isFolder = l.type === 'FOLDER';
-            html += `<li><span class="badge ${isFolder?'b-folder':'b-link'}">${isFolder?'DIR':'LINK'}</span><a href="${l.url}" target="_blank">${l.name} ↗</a></li>`;
+            html += `<li><span class="badge b-link">LINK</span><a href="${l.url}" target="_blank">${l.name} ↗</a></li>`;
         });
+        
         html += `</ul></div>`;
     });
+    
     html += `</div><script>${script}</script></body></html>`;
     zip.file("index.html", html);
 }
