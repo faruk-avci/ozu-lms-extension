@@ -659,6 +659,9 @@ async function startDownloadProcess() {
                     structEntry.links.push({ type: 'LINK', name: item.name, url: item.url });
                 } else {
                     let targetFolder = folder;
+                    // Create a shared ref object so download phase can update the name
+                    const fileRef = { name: name };
+
                     if (item.folderPath) {
                         targetFolder = folder.folder(item.folderPath);
                         let folderStruct = structEntry.folders.find(f => f.name === item.folderPath);
@@ -666,12 +669,12 @@ async function startDownloadProcess() {
                             folderStruct = { name: item.folderPath, files: [] };
                             structEntry.folders.push(folderStruct);
                         }
-                        folderStruct.files.push(name);
+                        folderStruct.files.push(fileRef);
                     } else {
-                        structEntry.files.push({ type: 'file', originalName: item.name, finalFileName: name });
+                        structEntry.files.push({ type: 'file', originalName: item.name, finalFileName: name, fileRef });
                     }
 
-                    downloadQueue.push({ type: 'file', folder: targetFolder, url: item.url, originalName: item.name, finalFileName: name });
+                    downloadQueue.push({ type: 'file', folder: targetFolder, url: item.url, originalName: item.name, finalFileName: name, fileRef });
                     totalItemsFound++;
                 }
             });
@@ -704,6 +707,19 @@ async function startDownloadProcess() {
                     else if (t.includes('presentation')) item.finalFileName += ".pptx";
                     else if (t.includes('zip')) item.finalFileName += ".zip";
                     else if (t.includes('excel') || t.includes('sheet')) item.finalFileName += ".xlsx";
+                    else if (t.includes('image/png')) item.finalFileName += ".png";
+                    else if (t.includes('image/jpeg')) item.finalFileName += ".jpg";
+                    else if (t.includes('image/gif')) item.finalFileName += ".gif";
+                    else if (t.includes('image/svg')) item.finalFileName += ".svg";
+                    else if (t.includes('text/plain')) item.finalFileName += ".txt";
+                    else if (t.includes('text/csv')) item.finalFileName += ".csv";
+                    else if (t.includes('video/mp4')) item.finalFileName += ".mp4";
+                    else if (t.includes('audio/mpeg')) item.finalFileName += ".mp3";
+                }
+
+                // Sync the final name back to the structure ref so index.html links match
+                if (item.fileRef) {
+                    item.fileRef.name = item.finalFileName;
                 }
 
                 // Base64 Fix
@@ -770,8 +786,10 @@ function generateIndexHtml(zip, structure, title) {
 
         // 1. Files
         sec.files.forEach(f => {
+            // Use the updated name from the fileRef (which has the extension added during download)
+            const displayFileName = f.fileRef ? f.fileRef.name : f.finalFileName;
             if (f.error) html += `<li><span class="badge b-err">ERR</span>${f.originalName} (See Log)</li>`;
-            else html += `<li><span class="badge ${f.isLocalPage ? 'b-page' : 'b-file'}">${f.isLocalPage ? 'PAGE' : 'FILE'}</span><a href="${encodeURIComponent(sec.title)}/${encodeURIComponent(f.finalFileName)}" target="_blank">${f.originalName}</a></li>`;
+            else html += `<li><span class="badge ${f.isLocalPage ? 'b-page' : 'b-file'}">${f.isLocalPage ? 'PAGE' : 'FILE'}</span><a href="${encodeURIComponent(sec.title)}/${encodeURIComponent(displayFileName)}" target="_blank">${f.originalName}</a></li>`;
         });
 
         // 2. Folders (New Collapsible Logic)
@@ -787,7 +805,9 @@ function generateIndexHtml(zip, structure, title) {
                 if (dir.files.length === 0) {
                     html += `<li style="color:#aaa;">Empty folder</li>`;
                 } else {
-                    dir.files.forEach(fName => {
+                    dir.files.forEach(fileEntry => {
+                        // fileEntry is now a ref object { name: '...' } with the final name including extension
+                        const fName = typeof fileEntry === 'object' ? fileEntry.name : fileEntry;
                         const path = `${encodeURIComponent(sec.title)}/${encodeURIComponent(dir.name)}/${encodeURIComponent(fName)}`;
                         html += `<li><span class="badge b-file" style="transform:scale(0.85)">FILE</span><a href="${path}" target="_blank">${fName}</a></li>`;
                     });
