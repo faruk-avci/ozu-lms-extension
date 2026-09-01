@@ -843,7 +843,13 @@ async function exportGrades() {
         const rows = doc.querySelectorAll('table.user-grade tbody tr, table.generaltable tbody tr');
 
         rows.forEach(row => {
-            const c = Array.from(row.querySelectorAll('td,th')).map(x => x.innerText.replace(/,/g, " ").trim());
+            const c = Array.from(row.querySelectorAll('td,th')).map(x => {
+                // The parsed document is never rendered, so innerText degrades to textContent:
+                // action menus ("Grade analysis" dropdowns) leak their markup indentation into the cell.
+                const cell = x.cloneNode(true);
+                cell.querySelectorAll('.action-menu, .dropdown-menu, script, style').forEach(n => n.remove());
+                return cell.textContent.replace(/\s+/g, " ").replace(/,/g, " ").trim();
+            });
             if (c.length > 2) csv += c.slice(0, 5).join(",") + "\n";
         });
 
